@@ -22,11 +22,13 @@ module RemoteData =
     | Loading
     | Failure of 'error
     | Success of 'content
+
   let map f = function
     | NotAsked -> NotAsked
     | Loading -> Loading
     | Failure e -> Failure e
     | Success c -> Success (f c)
+
   let mapError f = function
     | NotAsked -> NotAsked
     | Loading -> Loading
@@ -42,6 +44,8 @@ module Tree =
   open RemoteData
 
   type NodeId = System.Guid
+  let newId() =System.Guid.NewGuid()
+
   type TreeMsg<'a, 'amsg> =
     | NoOp
     | Expand
@@ -50,7 +54,6 @@ module Tree =
     | FetchChildrenDone of RemoteData<string, 'a list>
     | ChildAt of NodeId * TreeMsg<'a, 'amsg>
     | Content of 'amsg
-
   and 'a Node =
     { content : 'a
       children: 'a ChildNodes
@@ -58,6 +61,7 @@ module Tree =
       id: NodeId
     }
   and 'a ChildNodes = RemoteData<string, 'a Node list>
+
   type Tree<'a, 'amsg> =
     { view : 'a -> 'amsg Dispatch -> React.ReactElement
       update : 'amsg -> 'a -> ('a * Cmd<'amsg>)
@@ -65,7 +69,7 @@ module Tree =
       root: 'a Node
     }
 
-  let rec private viewNode (dispatch: TreeMsg<'a,'amsg> -> unit) viewContent node : React.ReactElement =
+  let rec private viewNode (dispatch: TreeMsg<'a,'amsg> -> unit) viewContent node =
     let mapSecond f (a,b) = a, f b
     let toChildAt i msg = ChildAt(i,msg)
     let viewNodes dispatch viewContent = function
@@ -74,26 +78,34 @@ module Tree =
       | Failure error -> [ unbox error ]
       | Success nodes ->
         nodes
-        |> List.map (fun childNode -> R.li [] [viewNode (toChildAt childNode.id >> dispatch) viewContent childNode ])
+        |> List.map (fun childNode ->
+           let childDispatch = toChildAt childNode.id >> dispatch
+           R.li []
+                [viewNode childDispatch viewContent childNode ])
         |> R.ul []
         |> List.singleton
     let onClick msg =
       OnClick <| fun _ -> msg |> dispatch
+    let onClickMsg =
+      match node.expanded with
+      | true -> Collapse
+      | false -> Expand
+    let sign =
+      match node.expanded, node.children with
+      | true, Success _ -> "▼"
+      | false, Success _ -> "►"
+      | true, _ -> "▽"
+      | false, _ -> "▷"
+      |> unbox
 
-    if node.expanded then
-      R.div [] [
-                R.button [onClick Collapse] [unbox "\\/"]
-                viewContent node.content (Content >> dispatch)
-               ]
-    else
-      R.div [] [
-                R.button [onClick Expand] [unbox "|>"]
-                viewContent node.content (Content >> dispatch)
-               ]
+    R.div [] [ R.button [onClick onClickMsg] [sign]
+               viewContent node.content (Content >> dispatch)
+             ]
+
   let view (model: Tree<'a, 'amsg>) (dispatch: TreeMsg<'a,'amsg> -> unit) =
     viewNode dispatch model.view model.root
 
-  let rec private updateNode (msg: TreeMsg<'a, 'amsg>) node (tree: Tree<'a,'amsg>) =
+  let rec private updateNode msg node tree =
     match msg with
     | NoOp -> node, []
     | Expand ->
@@ -102,16 +114,18 @@ module Tree =
         { node with expanded = true; children = Loading }, tree.fetch node.content
       | _ ->
         { node with expanded = true }, []
-    | Collapse -> { node with expanded = false } , [ ]
+    | Collapse -> { node with expanded = false } , []
     | FetchChildren -> node , tree.fetch node.content
     | FetchChildrenDone remoteList ->
         let children =
           remoteList
-          |> RemoteData.map (fun arr -> arr |> List.map (fun content ->
-                                                            { content = content
-                                                              children = NotAsked
-                                                              expanded = false
-                                                              id = Guid.NewGuid()}))
+          |> RemoteData.map (fun arr ->
+              arr
+              |> List.map (fun content ->
+                { content = content
+                  children = NotAsked
+                  expanded = false
+                  id = Guid.NewGuid()}))
         { node with children = children }, []
     | Content amsg ->
       let (content1: 'a, cmd) = tree.update amsg node.content
@@ -123,18 +137,17 @@ module Tree =
           children
           |> List.map (fun n ->
             if n.id <> nodeid
-            then n,[]
+            then n, []
             else updateNode msg n tree
           )
         let children1 = tuples |> List.map fst
         let cmd = tuples |> List.collect snd
-        {node with children = Success children1 }, cmd
+        { node with children = Success children1 }, cmd
       | _ -> node, []
 
-  let update (msg: TreeMsg<'a, 'amsg>) (tree: Tree<'a,'amsg>) : Tree<'a,'amsg> * Cmd<TreeMsg<'a,'amsg>> =
+  let update (msg: TreeMsg<'a, 'amsg>) (tree: Tree<'a,'amsg>) =
     let (root1, cmd) = updateNode msg tree.root tree
     { tree with root = root1 }, cmd
-
 
 /// example component
 module C =
@@ -176,12 +189,12 @@ module C =
       expanded = false
       id = Guid.NewGuid()
     }
-  let init() : Tree<int, Msg> =
+  let init() =
     { view = view
       update = update
       fetch = fetch
       root = root
-    }
+    }, []
 
 // MODEL
 
@@ -214,7 +227,7 @@ open Elmish.React
 open Elmish.Debug
 
 // App
-Program.mkProgram init update view
+Program.mkProgram C.init Tree.update Tree.view
 |> Program.withReact "elmish-app"
 |> Program.withDebugger
 |> Program.run
