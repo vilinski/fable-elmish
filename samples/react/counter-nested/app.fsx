@@ -15,26 +15,30 @@ open Fable.Core
 open Fable.Import
 open Elmish
 
-
+/// Remote data
 module RemoteData =
+  /// Extended `Result` alike data structure for remote data
   type RemoteData<'error,'content> =
     | NotAsked
     | Loading
     | Failure of 'error
     | Success of 'content
 
+  /// transforms content in case of fetch success
   let map f = function
     | NotAsked -> NotAsked
     | Loading -> Loading
     | Failure e -> Failure e
     | Success c -> Success (f c)
 
+  /// transforms content in case of fetch failure
   let mapError f = function
     | NotAsked -> NotAsked
     | Loading -> Loading
     | Failure e -> Failure (f e)
     | Success c -> Success c
 
+/// Types holding the recursive nested elements
 module Tree =
   module R = Fable.Helpers.React
   open R.Props
@@ -43,9 +47,11 @@ module Tree =
   open Fable.Helpers.React.Props
   open RemoteData
 
+  /// Node id
   type NodeId = System.Guid
+  /// create new id
   let newId() = System.Guid.NewGuid()
-
+  /// tree messages
   type TreeMsg<'a, 'amsg> =
     | NoOp
     | Expand
@@ -54,18 +60,28 @@ module Tree =
     | FetchChildrenDone of RemoteData<string, 'a array>
     | ChildAt of NodeId * TreeMsg<'a, 'amsg>
     | Content of 'amsg
+  /// a node containing some data, can have multiple child nodes
   and 'a Node =
-    { content : 'a
-      children: 'a ChildNodes
+    { /// content of the node
+      content : 'a
+      /// lazy loaded children nodes
+      children: RemoteData<string, 'a Node array>
+      /// indicated whether the node is expanded
       expanded: bool
+      /// node id used to propagate message
       id: NodeId
     }
-  and 'a ChildNodes = RemoteData<string, 'a Node array>
 
+  /// Nested elements structure.
   type Tree<'a, 'amsg> =
-    { view : 'a -> 'amsg Dispatch -> React.ReactElement
+    { /// The TEA view function for the content type
+      view : 'a -> 'amsg Dispatch -> React.ReactElement
+      /// The TEA update function for the
       update : 'amsg -> 'a -> ('a * Cmd<'amsg>)
+      /// Function to lazy load children elements.
+      /// Should produce a message, adding them to the structure
       fetch : 'a -> Cmd<TreeMsg<'a,'amsg>>
+      /// The root node containing single element
       root: 'a Node
     }
   let toChildAt childNodeId msg = ChildAt(childNodeId, msg)
@@ -90,6 +106,7 @@ module Tree =
       match node.expanded with
       | true -> Collapse
       | false -> Expand
+    // make visible whether the element is already fetched
     let sign =
       match node.expanded, node.children with
       | true, Success _ -> "▼"
@@ -153,7 +170,7 @@ module Tree =
     let (root1, cmd) = updateNode msg tree.root tree
     { tree with root = root1 }, cmd
 
-/// example component
+/// counter component
 module C =
   open System
   open RemoteData
@@ -167,6 +184,7 @@ module C =
   type Msg =
     | Increment
     | Decrement
+
   let view count dispatch =
     let onClick msg =
       OnClick <| fun _ -> msg |> dispatch
@@ -183,7 +201,7 @@ module C =
 
   let fetch i =
     Cmd.ofPromise
-      (fun i -> promise { return [| i + 1; i + 2; i + 3 |] })
+      (fun i -> promise { return [| i + 1; i + 2; i + 3 |] |> Array.map ((*) 10) })
       i
       (Success >> FetchChildrenDone) (string >> Failure >> FetchChildrenDone)
 
@@ -205,7 +223,8 @@ module C =
 type Msg =
   | Increment
   | Decrement
-let init () = 0,[]
+let init () = 0, []
+
 // UPDATE
 
 let update (msg:Msg) count =
